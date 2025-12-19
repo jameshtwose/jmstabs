@@ -5,66 +5,283 @@
     <title>Clean Tab Viewer</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
+        :root {
+            --bg: #1a1a1a;
+            --panel: #0f0f0f;
+            --muted: #9a9a9a;
+            --text: #ddd;
+            --accent: #ffb86c;
+            --gap: 12px;
+        }
+
+        html,
         body {
-            font-family: monospace;
-            padding: 20px;
-            background: #1a1a1a;
-            color: #ddd;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: "SFMono-Regular", Menlo, Monaco, monospace;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            padding: 16px;
+            box-sizing: border-box;
+        }
+
+        /* Layout containers */
+        .controls {
+            display: flex;
+            gap: var(--gap);
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .controls .group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        select {
+            padding: 10px 12px;
+            font-size: 15px;
+            border-radius: 6px;
+            border: 1px solid #222;
+            background: #0b0b0b;
+            color: var(--text);
+            box-sizing: border-box;
+        }
+
+        button {
+            padding: 10px 12px;
+            font-size: 15px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            background: #222;
+            color: var(--text);
+            cursor: pointer;
+        }
+
+        button:active {
+            transform: translateY(1px);
         }
 
         pre {
             white-space: pre-wrap;
             word-wrap: break-word;
-            font-size: 14px;
-            line-height: 1.5;
-        }
-
-        input {
-            width: 80%;
-            padding: 10px;
-            margin-bottom: 10px;
+            font-size: 15px;
+            line-height: 1.45;
+            margin: 0;
         }
 
         .chord {
-            color: #ffb86c;
-            font-weight: bold;
+            color: var(--accent);
+            font-weight: 700;
+        }
+
+        /* Results panel and output */
+        #results {
+            margin-top: 10px;
+            color: var(--text);
+            max-height: 220px;
+            overflow: auto;
+            padding: 8px;
+            background: #0b0b0b;
+            border-radius: 6px;
+            border: 1px solid #222;
+        }
+
+        #output {
+            max-height: 80vh;
+            overflow: auto;
+            padding: 10px;
+            background: var(--panel);
+            border-radius: 6px;
+            border: 1px solid #222;
+            margin-top: 10px;
+        }
+
+        /* Make lists and links touch-friendly */
+        #results ul {
+            padding: 0;
+            margin: 0;
+            list-style: none;
+        }
+
+        #results li {
+            padding: 8px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            justify-content: space-between;
+        }
+
+        #results a {
+            color: var(--text);
+            text-decoration: none;
+            font-size: 15px;
+        }
+
+        /* Small helper tweaks */
+        label {
+            font-size: 13px;
+        }
+
+        /* Responsive rules for small screens */
+        @media (max-width:600px) {
+            body {
+                padding: 12px;
+            }
+
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .controls .group {
+                width: 100%;
+                justify-content: space-between;
+            }
+
+            input[type="text"],
+            input[type="number"],
+            select,
+            button {
+                width: 100%;
+            }
+
+            #output {
+                padding: 8px;
+            }
+
+            pre {
+                font-size: 16px;
+            }
+
+            #results {
+                max-height: 180px;
+            }
+        }
+
+        /* Slightly larger tap targets for very small phones */
+        @media (max-width:420px) {
+
+            button,
+            input[type="text"],
+            select {
+                padding: 12px 14px;
+                font-size: 16px;
+            }
+
+            pre {
+                font-size: 17px;
+            }
+        }
+
+        /* Toggle switch styles */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 52px;
+            height: 30px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+            position: absolute;
+            left: -9999px;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #444;
+            transition: 0.2s;
+            border-radius: 999px;
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03);
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 24px;
+            width: 24px;
+            left: 3px;
+            top: 3px;
+            background-color: #111;
+            transition: 0.2s;
+            border-radius: 50%;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.6);
+        }
+
+        .switch input:checked + .slider {
+            background-color: var(--accent);
+        }
+
+        .switch input:checked + .slider:before {
+            transform: translateX(22px);
+            background-color: #0b0b0b;
         }
     </style>
 </head>
 
 <body>
-    <input type="text" id="url" placeholder="Paste Ultimate Guitar URL here...">
-    <button onclick="fetchTab()">View Tab</button>
-    <div style="margin-top:10px;">
-        <input type="text" id="searchQuery" placeholder="Search Ultimate Guitar (artist or song)..." style="width:60%">
-        <button onclick="searchUG()">Search</button>
+    <div class="controls" style="margin-bottom:8px;gap:8px;">
+        <div class="group" style="flex:1; min-width:0;">
+            <input type="text" id="url" placeholder="Paste Ultimate Guitar URL here...">
+        </div>
+        <div class="group">
+            <button onclick="fetchTab()">View Tab</button>
+        </div>
     </div>
-    <div id="results"
-        style="margin-top:10px;color:#ddd;max-height:220px;overflow:auto;padding:6px;background:#0b0b0b;border-radius:6px;border:1px solid #222">
+
+    <div class="controls" style="margin-top:6px;">
+        <div class="group" style="flex:1; min-width:0;">
+            <input type="text" id="searchQuery" placeholder="Search Ultimate Guitar (artist or song)...">
+        </div>
+        <div class="group">
+            <button onclick="searchUG()">Search</button>
+        </div>
     </div>
-    <div style="margin-top:8px;color:#ddd;display:flex;gap:12px;align-items:center;">
-        <label style="font-size:13px"><input type="checkbox" id="autoScrollToggle"> Auto-scroll</label>
-        <label style="font-size:13px">Speed:
-            <select id="autoScrollSpeed" style="margin-left:6px;padding:6px;font-size:13px">
+
+    <div id="results"></div>
+
+    <div class="controls" style="margin-top:8px;color:var(--text);">
+        <div class="group" style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:13px;color:var(--text);">Auto-scroll</span>
+            <label class="switch" aria-label="Auto-scroll toggle">
+                <input type="checkbox" id="autoScrollToggle">
+                <span class="slider" aria-hidden="true"></span>
+            </label>
+        </div>
+        <div class="group">
+            <select id="autoScrollSpeed">
                 <option value="0">Off</option>
                 <option value="20">Very slow</option>
                 <option value="50" selected>Slow</option>
                 <option value="100">Medium</option>
                 <option value="200">Fast</option>
             </select>
-        </label>
-        <label style="font-size:13px">Transpose:
-            <button id="transposeDown" style="margin-left:6px;padding:4px 6px">-</button>
-            <input id="transposeValue" type="number" value="0"
-                style="width:56px;margin-left:6px;padding:4px;text-align:center"> semitones
-            <button id="transposeUp" style="margin-left:6px;padding:4px 6px">+</button>
-        </label>
-        <button id="autoScrollPause"
-            style="padding:6px 8px;border-radius:4px;background:#222;color:#ddd;border:1px solid #333">Pause</button>
+        </div>
+        <div class="group">
+            <button id="transposeDown">-</button>
+            <input id="transposeValue" type="number" value="0" style="width:80px;text-align:center">
+            <button id="transposeUp">+</button>
+        </div>
     </div>
-    <div id="output"
-        style="max-height:80vh;overflow:auto;padding:10px;background:#0f0f0f;border-radius:6px;border:1px solid #222;margin-top:10px">
-        <pre id="contents" style="margin:0">Tab will appear here...</pre>
+
+    <div id="output">
+        <pre id="contents">Tab will appear here...</pre>
     </div>
 
     <script>
@@ -382,7 +599,7 @@
                 }
 
                 // render results with a Load button per item and optional rating/count
-                resultsEl.innerHTML = '<ul style="list-style:none;padding:0;margin:0">' + results.map((r, idx) => {
+                resultsEl.innerHTML = '<ul>' + results.map((r, idx) => {
                     // rating may appear under several keys
                     const rating = (r.raw && (typeof r.raw.rating !== 'undefined' ? r.raw.rating : (typeof r.raw.avg_rating !== 'undefined' ? r.raw.avg_rating : (typeof r.raw.stars !== 'undefined' ? r.raw.stars : null)))) || null;
                     // vote/rating count fields: prefer explicit properties and display zero values too
@@ -408,7 +625,7 @@
                         metaParts.push('(' + escapeHtml(String(ratingCount)) + ')');
                     }
                     const meta = metaParts.length ? `<span style="color:#9a9a9a;font-size:12px;margin-left:8px">${metaParts.join(' ')}</span>` : '';
-                    return `\n<li style="padding:6px 0;display:flex;align-items:center;gap:8px;justify-content:space-between"><div style="display:flex;align-items:center;gap:8px"><a href="#" data-href="${r.href}" onclick="onResultClick(event)">${escapeHtml(r.text)}</a>${meta}</div><div><button data-href="${r.href}" onclick="loadResult(event)" style="font-size:12px;padding:4px 6px;border-radius:4px;background:#222;color:#ddd;border:1px solid #333">Load</button></div></li>`;
+                    return `\n<li><div style="display:flex;align-items:center;gap:8px"><a href="#" data-href="${r.href}" onclick="onResultClick(event)">${escapeHtml(r.text)}</a>${meta}</div><div><button data-href="${r.href}" onclick="loadResult(event)">Load</button></div></li>`;
                 }).join('') + '\n</ul>';
             } catch (e) {
                 console.error(e);
@@ -488,7 +705,8 @@
             if (!pxPerSec) return;
             autoScrollPxPerMs = pxPerSec / 1000;
             autoScrollPaused = false;
-            document.getElementById('autoScrollPause').innerText = 'Pause';
+            const pauseBtn = document.getElementById('autoScrollPause');
+            if (pauseBtn) pauseBtn.innerText = 'Pause';
             lastAutoScrollTs = null;
             autoScrollRafId = requestAnimationFrame(autoScrollLoop);
         }
@@ -505,19 +723,28 @@
             if (enabled) startAutoScroll(); else stopAutoScroll();
         }
 
-        document.getElementById('autoScrollToggle').addEventListener('change', function (e) {
-            toggleAutoScroll(e.target.checked);
-        });
+        const autoToggle = document.getElementById('autoScrollToggle');
+        if (autoToggle) {
+            autoToggle.addEventListener('change', function (e) {
+                toggleAutoScroll(e.target.checked);
+            });
+        }
 
-        document.getElementById('autoScrollSpeed').addEventListener('change', function () {
-            // restart with new speed if enabled
-            if (document.getElementById('autoScrollToggle').checked) startAutoScroll();
-        });
+        const speedEl = document.getElementById('autoScrollSpeed');
+        if (speedEl) {
+            speedEl.addEventListener('change', function () {
+                // restart with new speed if enabled
+                if (document.getElementById('autoScrollToggle') && document.getElementById('autoScrollToggle').checked) startAutoScroll();
+            });
+        }
 
-        document.getElementById('autoScrollPause').addEventListener('click', function () {
-            autoScrollPaused = !autoScrollPaused;
-            this.innerText = autoScrollPaused ? 'Resume' : 'Pause';
-        });
+        const pauseEl = document.getElementById('autoScrollPause');
+        if (pauseEl) {
+            pauseEl.addEventListener('click', function () {
+                autoScrollPaused = !autoScrollPaused;
+                this.innerText = autoScrollPaused ? 'Resume' : 'Pause';
+            });
+        }
 
         function onResultClick(e) {
             e.preventDefault();
