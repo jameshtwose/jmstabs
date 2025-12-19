@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Clean Tab Viewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #ddd;
+        }
+
+        pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        input {
+            width: 80%;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+
+        .chord {
+            color: #ffb86c;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <input type="text" id="url" placeholder="Paste Ultimate Guitar URL here...">
+    <button onclick="fetchTab()">View Tab</button>
+    <div style="margin-top:10px;">
+        <input type="text" id="searchQuery" placeholder="Search Ultimate Guitar (artist or song)..." style="width:60%">
+        <button onclick="searchUG()">Search</button>
+    </div>
+    <div id="results"
+        style="margin-top:10px;color:#ddd;max-height:220px;overflow:auto;padding:6px;background:#0b0b0b;border-radius:6px;border:1px solid #222">
+    </div>
+    <div style="margin-top:8px;color:#ddd;display:flex;gap:12px;align-items:center;">
+        <label style="font-size:13px"><input type="checkbox" id="autoScrollToggle"> Auto-scroll</label>
+        <label style="font-size:13px">Speed:
+            <select id="autoScrollSpeed" style="margin-left:6px;padding:6px;font-size:13px">
+                <option value="0">Off</option>
+                <option value="20">Very slow</option>
+                <option value="50" selected>Slow</option>
+                <option value="100">Medium</option>
+                <option value="200">Fast</option>
+            </select>
+        </label>
+        <label style="font-size:13px">Transpose:
+            <button id="transposeDown" style="margin-left:6px;padding:4px 6px">-</button>
+            <input id="transposeValue" type="number" value="0"
+                style="width:56px;margin-left:6px;padding:4px;text-align:center"> semitones
+            <button id="transposeUp" style="margin-left:6px;padding:4px 6px">+</button>
+        </label>
+        <button id="autoScrollPause"
+            style="padding:6px 8px;border-radius:4px;background:#222;color:#ddd;border:1px solid #333">Pause</button>
+    </div>
+    <div id="output"
+        style="max-height:80vh;overflow:auto;padding:10px;background:#0f0f0f;border-radius:6px;border:1px solid #222;margin-top:10px">
+        <pre id="contents" style="margin:0">Tab will appear here...</pre>
+    </div>
+
+    <script>
+        // Utility: decode HTML entities
+        function decodeHtmlEntities(str) {
+            const txt = document.createElement('textarea');
+            txt.innerHTML = str;
+            return txt.value;
+        }
+
+        // Keep original raw tab content so we can re-render with different transpose values
+        let lastRawTab = null;
+        let currentTranspose = 0;
+
+        // Map of note names in semitone order (including sharps and flats handling)
+        const NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+        function normalizeNoteName(n) {
+            // Convert flats to sharps (e.g., Bb -> A#)
+            if (!n) return n;
+            n = n.replace(/\s+/g, '');
+            n = n.replace('Db', 'C#').replace('Eb', 'D#').replace('Gb', 'F#').replace('Ab', 'G#').replace('Bb', 'A#');
+            return n;
+        }
+
+        function transposeNote(note, semitones) {
+            // note like C, C#, Cm, Cmaj7, Bb, F#m, etc. We'll find the root note and shift it.
+            if (!note) return note;
+            // Regex to capture root note (including optional b or #) and the rest
+            const m = note.match(/^([A-Ga-g])([#b]?)(.*)$/);
+            if (!m) return note;
+            let root = m[1].toUpperCase() + (m[2] || '');
+            const rest = m[3] || '';
+            // convert flats to sharps
+            root = normalizeNoteName(root);
+            // find index
+            let idx = NOTES.indexOf(root.replace('B#', 'C').replace('E#', 'F'));
+            if (idx === -1) {
+                // try more normalization
+                root = root.replace('E#', 'F').replace('B#', 'C');
+                idx = NOTES.indexOf(root);
+            }
+            if (idx === -1) return note; // unknown root
+            const newIdx = (idx + semitones + 1200) % 12; // wrap
+            const newRoot = NOTES[newIdx];
+            return newRoot + rest;
+        }
+
+        // Transpose all chords found inside [ch]...[/ch] in the provided raw text
+        function applyTransposeToRaw(rawText, semitones) {
+            if (!rawText) return rawText;
+            if (!semitones) return rawText;
+            return rawText.replace(/\[ch\]([\s\S]*?)\[\/ch\]/gi, function (_, chordText) {
+                // chordText may contain multiple chords separated by spaces or slashes
+                const parts = chordText.split(/(\s+|\/)/); // keep separators
+                const transposed = parts.map(p => {
+                    // preserve separators
+                    if (/^\s+$/.test(p) || p === '/') return p;
+                    return transposeNote(p, semitones);
+                }).join('');
+                return '[ch]' + transposed + '[/ch]';
+            });
+        }
+
+        // Safely set pre content (escape HTML except chord spans)
+        function renderTabToPre(raw) {
+            // Store raw for re-rendering with transpose changes
+            lastRawTab = raw;
+            // Apply transpose if non-zero
+            const semis = Number(document.getElementById('transposeValue')?.value || 0);
+            currentTranspose = semis;
+            if (semis) raw = applyTransposeToRaw(raw, semis);
+
+            // Replace chord tags with a placeholder token so we can escape HTML safely
+            const token = '__CHORD_TOKEN__';
+            let withTokens = raw.replace(/\[ch\](.*?)\[\/ch\]/g, function (_, g1) {
+                return token + encodeURIComponent(g1) + token;
+            });
+
+            // Escape HTML
+            const escaped = withTokens
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+
+            // Restore chord spans
+            const restored = escaped.replace(new RegExp(token + '(.+?)' + token, 'g'), function (_, g1) {
+                return '<span class="chord">' + decodeURIComponent(g1) + '</span>';
+            });
+
+            // Also convert CRLF to newline
+            const final = restored.replace(/\\r\\n/g, '\n');
+            document.getElementById('contents').innerHTML = final;
+            // reset output scroll and start autoscroll if enabled
+            const output = document.getElementById('output');
+            if (output) {
+                output.scrollTop = 0;
+                if (document.getElementById('autoScrollToggle').checked) startAutoScroll();
+            }
+        }
+
+        // ...existing code...
+
+        // Wire up transpose UI buttons
+        document.getElementById('transposeUp').addEventListener('click', function () {
+            const el = document.getElementById('transposeValue');
+            el.value = Number(el.value || 0) + 1;
+            // re-render last raw tab
+            if (lastRawTab) renderTabToPre(lastRawTab);
+        });
+        document.getElementById('transposeDown').addEventListener('click', function () {
+            const el = document.getElementById('transposeValue');
+            el.value = Number(el.value || 0) - 1;
+            if (lastRawTab) renderTabToPre(lastRawTab);
+        });
+        document.getElementById('transposeValue').addEventListener('change', function () {
+            if (lastRawTab) renderTabToPre(lastRawTab);
+        });
+
+        // Try multiple public CORS proxies in sequence. If one fails, try the next.
+        async function fetchPage(targetUrl) {
+            const attempts = [
+                { name: 'AllOrigins (JSON)', url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, type: 'json' },
+                { name: 'AllOrigins (raw)', url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, type: 'text' },
+                { name: 'ThingProxy', url: `https://thingproxy.freeboard.io/fetch/${targetUrl}`, type: 'text' }
+            ];
+
+            let lastError = null;
+            for (const a of attempts) {
+                try {
+                    const r = await fetch(a.url);
+                    if (!r.ok) throw new Error(`${a.name} returned ${r.status}`);
+                    if (a.type === 'json') {
+                        const j = await r.json();
+                        if (j && j.contents) return j.contents;
+                        throw new Error('No contents in AllOrigins JSON');
+                    }
+                    return await r.text();
+                } catch (e) {
+                    lastError = e;
+                    console.warn('Proxy failed:', a.name, e);
+                }
+            }
+            throw new Error('All proxies failed. Last error: ' + (lastError && lastError.message));
+        }
+
+        async function fetchTab() {
+            const ugUrl = document.getElementById('url').value.trim();
+            if (!ugUrl) return;
+
+            document.getElementById('contents').innerText = 'Loading...';
+
+            try {
+                const html = await fetchPage(ugUrl);
+
+                // Parse DOM and try to find .js-store[data-content]
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+
+                // First attempt: .js-store[data-content]
+                const storeEl = doc.querySelector('.js-store[data-content]');
+                let dataObj = null;
+
+                if (storeEl) {
+                    try {
+                        const raw = storeEl.getAttribute('data-content');
+                        dataObj = JSON.parse(raw);
+                    } catch (e) {
+                        console.warn('Failed to parse data-content JSON', e);
+                    }
+                }
+
+                // Fallback: window.UGAPP.store.page = { ... } in a script tag
+                if (!dataObj) {
+                    // Look for script tags text containing window.UGAPP.store.page
+                    const scripts = Array.from(doc.querySelectorAll('script'));
+                    const regex = /window\.UGAPP\.store\.page\s*=\s*({[\s\S]*?});/m;
+                    for (const s of scripts) {
+                        const txt = s.textContent || '';
+                        const m = txt.match(regex);
+                        if (m) {
+                            try {
+                                dataObj = JSON.parse(m[1]);
+                                break;
+                            } catch (e) {
+                                console.warn('Failed to parse UGAPP JSON', e);
+                            }
+                        }
+                    }
+                }
+
+                if (!dataObj) {
+                    // As a last resort, try to extract js-store with data-content inside HTML string
+                    const storeRegex = /<div[^>]+class=\"js-store\"[^>]+data-content=\"([^\"]+)\"/i;
+                    const m = html.match(storeRegex);
+                    if (m) {
+                        try {
+                            const decoded = decodeHtmlEntities(m[1]);
+                            dataObj = JSON.parse(decoded);
+                        } catch (e) {
+                            console.warn('Failed parse fallback store JSON', e);
+                        }
+                    }
+                }
+
+                if (!dataObj) throw new Error('Could not locate data JSON in the page');
+
+                // Drill into the tab content
+                const tabText = dataObj?.data?.tab_view?.wiki_tab?.content || dataObj?.store?.page?.data?.tab_view?.wiki_tab?.content;
+                if (!tabText) throw new Error('Tab content not found in parsed JSON');
+
+                // The tab content may contain escaped sequences like \r\n; decode where necessary
+                let decoded = tabText.replace(/\\r\\n/g, '\n');
+
+                // Remove [tab] and [/tab] markers which are used for layout on UG
+                decoded = decoded.replace(/\[\/??tab\]/gi, '');
+
+                renderTabToPre(decoded);
+            } catch (err) {
+                console.error(err);
+                document.getElementById('contents').innerText = 'Error fetching or parsing tab: ' + (err.message || String(err));
+            }
+        }
+
+        // Keep last parsed search JSON and results for inspection
+        let lastSearchData = null;
+        let lastSearchResults = [];
+
+        // Search Ultimate Guitar for tabs
+        async function searchUG() {
+            const q = document.getElementById('searchQuery').value.trim();
+            const resultsEl = document.getElementById('results');
+            resultsEl.innerText = '';
+            if (!q) return;
+
+            resultsEl.innerText = 'Searching...';
+            const searchUrl = 'https://www.ultimate-guitar.com/search.php?search_type=title&value=' + encodeURIComponent(q);
+            try {
+                const html = await fetchPage(searchUrl);
+                const doc = new DOMParser().parseFromString(html, 'text/html');
+
+                // Try to parse .js-store[data-content] JSON like on the site
+                let dataObj = null;
+                const storeEl = doc.querySelector('.js-store[data-content]');
+                if (storeEl) {
+                    try {
+                        const raw = storeEl.getAttribute('data-content');
+                        dataObj = JSON.parse(raw);
+                    } catch (e) {
+                        try {
+                            // sometimes attribute is HTML-encoded
+                            dataObj = JSON.parse(decodeHtmlEntities(storeEl.getAttribute('data-content')));
+                        } catch (e2) {
+                            console.warn('Failed to parse store data-content', e2);
+                        }
+                    }
+                }
+
+                // fallback to script window.UGAPP.store.page = {...}
+                if (!dataObj) {
+                    const scripts = Array.from(doc.querySelectorAll('script'));
+                    const regex = /window\.UGAPP\.store\.page\s*=\s*({[\s\S]*?});/m;
+                    for (const s of scripts) {
+                        const txt = s.textContent || '';
+                        const m = txt.match(regex);
+                        if (m) {
+                            try {
+                                dataObj = JSON.parse(m[1]);
+                                break;
+                            } catch (e) {
+                                console.warn('Failed to parse UGAPP JSON', e);
+                            }
+                        }
+                    }
+                }
+
+                // Last resort: regex against HTML
+                if (!dataObj) {
+                    const storeRegex = /<div[^>]+class=\"js-store\"[^>]+data-content=\"([^\"]+)\"/i;
+                    const m = html.match(storeRegex);
+                    if (m) {
+                        try {
+                            const decoded = decodeHtmlEntities(m[1]);
+                            dataObj = JSON.parse(decoded);
+                        } catch (e) {
+                            console.warn('Failed parse fallback store JSON', e);
+                        }
+                    }
+                }
+
+                lastSearchData = dataObj;
+
+                // If we have parsed JSON results, use them; otherwise fall back to scanning anchors
+                let results = [];
+                if (dataObj && (dataObj.store && dataObj.store.page && dataObj.store.page.data && dataObj.store.page.data.results)) {
+                    results = dataObj.store.page.data.results.map(r => ({ href: r.tab_url || r.tab_url || r.tab_url, text: (r.song_name ? (r.artist_name ? r.artist_name + ' - ' : '') + r.song_name : (r.tab_url || 'Result')), raw: r })).filter(r => !isExcludedResult(r));
+                } else if (dataObj && dataObj.store && dataObj.store.page && dataObj.store.page.data && dataObj.store.page.data.results === undefined && dataObj.data && dataObj.data.results) {
+                    // some variants use data.results
+                    results = dataObj.data.results.map(r => ({ href: r.tab_url || r.tab_url, text: (r.song_name ? (r.artist_name ? r.artist_name + ' - ' : '') + r.song_name : (r.tab_url || 'Result')), raw: r })).filter(r => !isExcludedResult(r));
+                } else {
+                    const anchors = Array.from(doc.querySelectorAll('a'))
+                        .filter(a => a.href && a.href.includes('/tab/'))
+                        .map(a => ({ href: a.href, text: (a.textContent || a.innerText || a.getAttribute('title') || a.href).trim() }));
+                    const seen = new Set();
+                    results = anchors.filter(x => !isExcludedResult(x)).filter(x => { if (seen.has(x.href)) return false; seen.add(x.href); return true; }).slice(0, 20);
+                }
+
+                lastSearchResults = results;
+
+                // (no raw JSON UI) — results rendered below
+
+                if (!results || results.length === 0) {
+                    resultsEl.innerText = 'No results found.';
+                    return;
+                }
+
+                // render results with a Load button per item and optional rating/count
+                resultsEl.innerHTML = '<ul style="list-style:none;padding:0;margin:0">' + results.map((r, idx) => {
+                    // rating may appear under several keys
+                    const rating = (r.raw && (typeof r.raw.rating !== 'undefined' ? r.raw.rating : (typeof r.raw.avg_rating !== 'undefined' ? r.raw.avg_rating : (typeof r.raw.stars !== 'undefined' ? r.raw.stars : null)))) || null;
+                    // vote/rating count fields: prefer explicit properties and display zero values too
+                    let ratingCount = null;
+                    if (r.raw) {
+                        if (typeof r.raw.votes !== 'undefined') ratingCount = r.raw.votes;
+                        else if (typeof r.raw.vote_count !== 'undefined') ratingCount = r.raw.vote_count;
+                        else if (typeof r.raw.ratings_count !== 'undefined') ratingCount = r.raw.ratings_count;
+                        else if (typeof r.raw.rating_count !== 'undefined') ratingCount = r.raw.rating_count;
+                        else if (typeof r.raw.voteCount !== 'undefined') ratingCount = r.raw.voteCount;
+                    }
+                    // Build meta display: show rating (rounded) and vote count when available. Display zero counts too.
+                    const metaParts = [];
+                    if (rating !== null && typeof rating !== 'undefined') {
+                        // round to 2 decimals but trim trailing .00
+                        let rstr = String(Number(rating));
+                        try {
+                            rstr = Number(rating).toFixed(2).replace(/\.00$/, '');
+                        } catch (e) { /* ignore */ }
+                        metaParts.push('⭐ ' + escapeHtml(rstr));
+                    }
+                    if (ratingCount !== null && typeof ratingCount !== 'undefined') {
+                        metaParts.push('(' + escapeHtml(String(ratingCount)) + ')');
+                    }
+                    const meta = metaParts.length ? `<span style="color:#9a9a9a;font-size:12px;margin-left:8px">${metaParts.join(' ')}</span>` : '';
+                    return `\n<li style="padding:6px 0;display:flex;align-items:center;gap:8px;justify-content:space-between"><div style="display:flex;align-items:center;gap:8px"><a href="#" data-href="${r.href}" onclick="onResultClick(event)">${escapeHtml(r.text)}</a>${meta}</div><div><button data-href="${r.href}" onclick="loadResult(event)" style="font-size:12px;padding:4px 6px;border-radius:4px;background:#222;color:#ddd;border:1px solid #333">Load</button></div></li>`;
+                }).join('') + '\n</ul>';
+            } catch (e) {
+                console.error(e);
+                resultsEl.innerText = 'Error searching: ' + e.message;
+            }
+        }
+
+        // Helper to escape result text when injecting as HTML
+        function escapeHtml(s) {
+            return (s || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+
+        // Exclude Pro (official/TabPro/Pro) and Ukulele results
+        function isExcludedResult(item) {
+            if (!item) return false;
+            // check raw.type first
+            const type = ((item.type || item.raw && item.raw.type) || '').toString().toLowerCase();
+            if (type.includes('pro')) return true;
+            if (type.includes('ukulele')) return true;
+
+            // fallback: check href or text for keywords
+            const href = (item.href || item.raw && item.raw.tab_url || '').toString().toLowerCase();
+            const text = (item.text || '').toString().toLowerCase();
+            if (href.includes('ukulele') || text.includes('ukulele')) return true;
+            if (href.includes('guitar-pro') || text.includes('guitar pro') || text.includes('tabpro') || href.includes('/pro/')) return true;
+            return false;
+        }
+
+        // --- Auto-scroll implementation (smooth, RAF-based) ---
+        let autoScrollRafId = null;
+        let autoScrollPaused = false;
+        let lastAutoScrollTs = null;
+        let autoScrollPxPerMs = 0; // pixels per millisecond
+        let autoScrollAccumulator = 0; // accumulate fractional pixels
+
+        function speedToPxPerSec(speed) {
+            // map select values to approximate pixels/second
+            switch (Number(speed)) {
+                case 20: return 12;   // very slow
+                case 50: return 30;   // slow
+                case 100: return 60;  // medium
+                case 200: return 120; // fast
+                default: return 0;
+            }
+        }
+
+        function autoScrollLoop(ts) {
+            if (!lastAutoScrollTs) lastAutoScrollTs = ts;
+            const delta = ts - lastAutoScrollTs;
+            lastAutoScrollTs = ts;
+            const output = document.getElementById('output');
+            if (!autoScrollPaused && autoScrollPxPerMs > 0) {
+                const dy = autoScrollPxPerMs * delta;
+                autoScrollAccumulator += dy;
+                // only move when we have at least 1 whole pixel to scroll to avoid fractional no-ops
+                if (autoScrollAccumulator >= 1) {
+                    const step = Math.floor(autoScrollAccumulator);
+                    autoScrollAccumulator -= step;
+                    const newTop = Math.min(output.scrollTop + step, output.scrollHeight - output.clientHeight);
+                    output.scrollTop = newTop;
+                    if (output.scrollTop + output.clientHeight >= output.scrollHeight - 1) {
+                        stopAutoScroll();
+                        return;
+                    }
+                }
+            }
+            autoScrollRafId = requestAnimationFrame(autoScrollLoop);
+        }
+
+        function startAutoScroll() {
+            stopAutoScroll();
+            const speed = Number(document.getElementById('autoScrollSpeed').value) || 0;
+            const pxPerSec = speedToPxPerSec(speed);
+            if (!pxPerSec) return;
+            autoScrollPxPerMs = pxPerSec / 1000;
+            autoScrollPaused = false;
+            document.getElementById('autoScrollPause').innerText = 'Pause';
+            lastAutoScrollTs = null;
+            autoScrollRafId = requestAnimationFrame(autoScrollLoop);
+        }
+
+        function stopAutoScroll() {
+            if (autoScrollRafId) {
+                cancelAnimationFrame(autoScrollRafId);
+                autoScrollRafId = null;
+            }
+            lastAutoScrollTs = null;
+        }
+
+        function toggleAutoScroll(enabled) {
+            if (enabled) startAutoScroll(); else stopAutoScroll();
+        }
+
+        document.getElementById('autoScrollToggle').addEventListener('change', function (e) {
+            toggleAutoScroll(e.target.checked);
+        });
+
+        document.getElementById('autoScrollSpeed').addEventListener('change', function () {
+            // restart with new speed if enabled
+            if (document.getElementById('autoScrollToggle').checked) startAutoScroll();
+        });
+
+        document.getElementById('autoScrollPause').addEventListener('click', function () {
+            autoScrollPaused = !autoScrollPaused;
+            this.innerText = autoScrollPaused ? 'Resume' : 'Pause';
+        });
+
+        function onResultClick(e) {
+            e.preventDefault();
+            const href = e.currentTarget.getAttribute('data-href');
+            document.getElementById('url').value = href;
+            fetchTab();
+        }
+
+        function loadResult(e) {
+            e.preventDefault();
+            const href = e.currentTarget.getAttribute('data-href');
+            if (!href) return;
+            document.getElementById('url').value = href;
+            // scroll output to top before loading
+            const output = document.getElementById('output');
+            output.scrollTop = 0;
+            fetchTab();
+            // if auto-scroll is enabled, restart to begin scrolling new content
+            if (document.getElementById('autoScrollToggle').checked) startAutoScroll();
+        }
+    </script>
+</body>
+
+</html>
