@@ -56,6 +56,30 @@
             box-sizing: border-box;
         }
 
+        /* Tighter controls for auto-scroll / transpose */
+        .controls .group input[type="number"],
+        .controls .group button {
+            height: 36px;
+            line-height: 1;
+        }
+
+        /* make range slider slightly taller on touch devices */
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            height: 6px;
+            background: #222;
+            border-radius: 6px;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: var(--accent);
+            border-radius: 50%;
+            margin-top: -6px;
+        }
+
         button {
             padding: 10px 12px;
             font-size: 15px;
@@ -99,6 +123,7 @@
             max-height: 80vh;
             overflow: auto;
             padding: 10px;
+            padding-top: 40px; /* extra top spacing for lyrics/output */
             background: var(--panel);
             border-radius: 6px;
             border: 1px solid #222;
@@ -156,6 +181,7 @@
 
             #output {
                 padding: 8px;
+                padding-top: 50px; /* extra top spacing for lyrics/output on mobile */
             }
 
             pre {
@@ -236,15 +262,6 @@
 </head>
 
 <body>
-    <div class="controls" style="margin-bottom:8px;gap:8px;">
-        <div class="group" style="flex:1; min-width:0;">
-            <input type="text" id="url" placeholder="Paste Ultimate Guitar URL here...">
-        </div>
-        <div class="group">
-            <button onclick="fetchTab()">View Tab</button>
-        </div>
-    </div>
-
     <div class="controls" style="margin-top:6px;">
         <div class="group" style="flex:1; min-width:0;">
             <input type="text" id="searchQuery" placeholder="Search Ultimate Guitar (artist or song)...">
@@ -256,27 +273,39 @@
 
     <div id="results"></div>
 
-    <div class="controls" style="margin-top:8px;color:var(--text);">
+    <!-- Recent links cached in localStorage -->
+    <div id="recentLinksContainer" style="margin-top:10px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <div style="font-size:13px;color:var(--muted);">Recent links</div>
+            <div>
+                <button id="clearRecentBtn" title="Clear recent links">Clear</button>
+            </div>
+        </div>
+        <div id="recentLinks" style="margin-top:6px;color:var(--text);background:#0b0b0b;padding:8px;border-radius:6px;border:1px solid #222;max-height:160px;overflow:auto"></div>
+    </div>
+
+    <!-- URL input removed; tabs are fetched when user clicks a result's Load link -->
+
+    <div class="controls" style="margin-top:8px;color:var(--text);align-items:center;justify-content:space-between;">
+        <div class="group" style="display:flex;align-items:center;gap:16px;flex:1;min-width:0;">
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-size:13px;color:var(--text);">Auto-scroll</span>
+                <label class="switch" aria-label="Auto-scroll toggle">
+                    <input type="checkbox" id="autoScrollToggle">
+                    <span class="slider" aria-hidden="true"></span>
+                </label>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
+                <input id="autoScrollSpeed" type="range" min="0" max="100" step="1" value="20" style="width:100%;max-width:320px">
+                <div id="autoScrollSpeedLabel" style="font-size:13px;color:var(--muted);min-width:64px;text-align:left">Slow</div>
+            </div>
+        </div>
+
         <div class="group" style="display:flex;align-items:center;gap:8px;">
-            <span style="font-size:13px;color:var(--text);">Auto-scroll</span>
-            <label class="switch" aria-label="Auto-scroll toggle">
-                <input type="checkbox" id="autoScrollToggle">
-                <span class="slider" aria-hidden="true"></span>
-            </label>
-        </div>
-        <div class="group">
-            <select id="autoScrollSpeed">
-                <option value="0">Off</option>
-                <option value="20">Very slow</option>
-                <option value="50" selected>Slow</option>
-                <option value="100">Medium</option>
-                <option value="200">Fast</option>
-            </select>
-        </div>
-        <div class="group">
-            <button id="transposeDown">-</button>
-            <input id="transposeValue" type="number" value="0" style="width:80px;text-align:center">
-            <button id="transposeUp">+</button>
+            <button id="transposeDown" style="width:40px;height:36px;padding:0;border-radius:6px">-</button>
+            <input id="transposeValue" type="number" value="0" style="width:64px;text-align:center;padding:8px 6px;border-radius:6px">
+            <button id="transposeUp" style="width:40px;height:36px;padding:0;border-radius:6px">+</button>
         </div>
     </div>
 
@@ -428,8 +457,7 @@
             throw new Error('All proxies failed. Last error: ' + (lastError && lastError.message));
         }
 
-        async function fetchTab() {
-            const ugUrl = document.getElementById('url').value.trim();
+        async function fetchTab(ugUrl) {
             if (!ugUrl) return;
 
             document.getElementById('contents').innerText = 'Loading...';
@@ -499,6 +527,14 @@
                 // Remove [tab] and [/tab] markers which are used for layout on UG
                 decoded = decoded.replace(/\[\/??tab\]/gi, '');
 
+                // Cache the decoded content so we avoid re-fetching the same tab later
+                try {
+                    const currentUrl = ugUrl || (doc.querySelector('link[rel="canonical"]') && doc.querySelector('link[rel="canonical"]').href) || null;
+                    const title = (doc.querySelector('title') && doc.querySelector('title').innerText) || currentUrl || 'Tab';
+                    if (currentUrl) addRecentLink(currentUrl, title, decoded);
+                } catch (e) {
+                    console.warn('Failed to cache fetched tab', e);
+                }
                 renderTabToPre(decoded);
             } catch (err) {
                 console.error(err);
@@ -638,7 +674,9 @@
             return (s || '')
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;');
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
         }
 
         // Exclude Pro (official/TabPro/Pro) and Ukulele results
@@ -665,14 +703,11 @@
         let autoScrollAccumulator = 0; // accumulate fractional pixels
 
         function speedToPxPerSec(speed) {
-            // map select values to approximate pixels/second
-            switch (Number(speed)) {
-                case 20: return 12;   // very slow
-                case 50: return 30;   // slow
-                case 100: return 60;  // medium
-                case 200: return 120; // fast
-                default: return 0;
-            }
+            // map slider value (0-200) to approx pixels/second.
+            // Use a gentle linear mapping: px/s = value * 0.6
+            const v = Number(speed) || 0;
+            if (v <= 0) return 0;
+            return v * 0.6;
         }
 
         function autoScrollLoop(ts) {
@@ -732,7 +767,22 @@
 
         const speedEl = document.getElementById('autoScrollSpeed');
         if (speedEl) {
-            speedEl.addEventListener('change', function () {
+            const speedLabel = document.getElementById('autoScrollSpeedLabel');
+            function updateSpeedLabel(v) {
+                const val = Number(v);
+                if (val <= 0) return 'Off';
+                if (val < 10) return 'Extremely slow';
+                if (val < 20) return 'Very slow';
+                if (val < 40) return 'Slow';
+                if (val < 60) return 'Medium';
+                return 'Fast';
+            }
+            // update label initially
+            if (speedLabel) speedLabel.innerText = updateSpeedLabel(speedEl.value);
+
+            // use input for live updates
+            speedEl.addEventListener('input', function () {
+                if (speedLabel) speedLabel.innerText = updateSpeedLabel(this.value);
                 // restart with new speed if enabled
                 if (document.getElementById('autoScrollToggle') && document.getElementById('autoScrollToggle').checked) startAutoScroll();
             });
@@ -749,22 +799,130 @@
         function onResultClick(e) {
             e.preventDefault();
             const href = e.currentTarget.getAttribute('data-href');
-            document.getElementById('url').value = href;
-            fetchTab();
+            fetchTab(href);
         }
 
         function loadResult(e) {
             e.preventDefault();
             const href = e.currentTarget.getAttribute('data-href');
             if (!href) return;
-            document.getElementById('url').value = href;
             // scroll output to top before loading
             const output = document.getElementById('output');
             output.scrollTop = 0;
-            fetchTab();
+            fetchTab(href);
             // if auto-scroll is enabled, restart to begin scrolling new content
             if (document.getElementById('autoScrollToggle').checked) startAutoScroll();
         }
+
+        // --- Recent links cache (localStorage) ---
+        const RECENT_KEY = 'jmstabs_recent_links_v1';
+        const RECENT_MAX = 20;
+
+        function loadRecent() {
+            try {
+                const raw = localStorage.getItem(RECENT_KEY);
+                if (!raw) return [];
+                const parsed = JSON.parse(raw);
+                if (!Array.isArray(parsed)) return [];
+                return parsed;
+            } catch (e) {
+                console.warn('Failed to load recent links', e);
+                return [];
+            }
+        }
+
+        function saveRecent(list) {
+            try {
+                localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, RECENT_MAX)));
+            } catch (e) {
+                console.warn('Failed to save recent links', e);
+            }
+        }
+
+        function addRecentLink(href, title, content) {
+            if (!href) return;
+            const list = loadRecent();
+            // remove existing entry for this href if present
+            const normalized = href.toString();
+            const filtered = list.filter(i => i.href !== normalized);
+            // add to front; store content when provided
+            const entry = { href: normalized, title: title || normalized, ts: Date.now() };
+            if (typeof content === 'string' && content.length) entry.content = content;
+            filtered.unshift(entry);
+            saveRecent(filtered);
+            renderRecentLinks();
+        }
+
+        function clearRecentLinks() {
+            try { localStorage.removeItem(RECENT_KEY); } catch (e) { }
+            renderRecentLinks();
+        }
+
+        function renderRecentLinks() {
+            const container = document.getElementById('recentLinks');
+            if (!container) return;
+            const list = loadRecent();
+            if (!list || list.length === 0) {
+                container.innerHTML = '<div style="color:var(--muted);font-size:13px">No recent links yet</div>';
+                return;
+            }
+            container.innerHTML = '<ul style="list-style:none;margin:0;padding:0">' + list.map(item => {
+                return `<li style="padding:6px 0;display:flex;justify-content:space-between;gap:8px;align-items:center"><a href="#" data-href="${escapeHtml(item.href)}" onclick="onRecentClick(event)">${escapeHtml(item.title)}</a><small style="color:var(--muted);font-size:12px">${new Date(item.ts).toLocaleString()}</small></li>`;
+            }).join('') + '</ul>';
+        }
+
+        function onRecentClick(e) {
+            e.preventDefault();
+            const href = e.currentTarget.getAttribute('data-href');
+            if (!href) return;
+            // if we have cached content for this href, render it directly to avoid re-fetching
+            try {
+                const list = loadRecent();
+                const found = (list || []).find(i => i.href === href);
+                if (found && found.content) {
+                    // render cached content
+                    renderTabToPre(found.content);
+                    // bump to front with existing title/content
+                    addRecentLink(found.href, found.title, found.content);
+                    return;
+                }
+            } catch (err) { /* ignore and fallback to fetch */ }
+            // fallback: fetch from UG and cache when fetched
+            fetchTab(href);
+        }
+
+        // Hook into result click/load to record visits
+        const originalOnResultClick = onResultClick;
+        window.onResultClick = function (e) {
+            // record then delegate
+            try {
+                const href = e.currentTarget.getAttribute('data-href');
+                const title = (e.currentTarget.innerText || '').trim();
+                addRecentLink(href, title);
+            } catch (err) { /* ignore */ }
+            return originalOnResultClick(e);
+        };
+
+        const originalLoadResult = loadResult;
+        window.loadResult = function (e) {
+            try {
+                const href = e.currentTarget.getAttribute('data-href');
+                const btnParent = e.currentTarget.parentElement?.previousElementSibling;
+                const title = btnParent ? (btnParent.innerText || '').trim() : href;
+                addRecentLink(href, title);
+            } catch (err) { /* ignore */ }
+            return originalLoadResult(e);
+        };
+
+        // fetchTab caching is handled after successful fetch inside fetchTab()
+
+        // wire clear button
+        document.getElementById('clearRecentBtn').addEventListener('click', function () {
+            clearRecentLinks();
+        });
+
+        // render on initial load
+        renderRecentLinks();
     </script>
 </body>
 
